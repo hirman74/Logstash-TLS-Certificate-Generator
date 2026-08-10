@@ -64,7 +64,9 @@ When you run the script it will:
 ---
 
 ## Elaborate on Step 6
-
+```bash
+sudo openssl x509 -req -in $(hostname -f).csr -CA ca.crt -CAkey ca.key -CAcreateserial -out $(hostname -f).crt -days 825 -sha256 -copy_extensions copy
+```
 This is a single `openssl` command that performs the **CA signing step** of a typical certificate-generation workflow. In plain terms, it takes a Certificate Signing Request (CSR) that was previously generated for this machine, signs it with your local Certificate Authority (CA), and writes the resulting signed certificate to disk.
 
 Here is what each piece of the command does:
