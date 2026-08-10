@@ -61,6 +61,35 @@ When you run the script it will:
 | 9 | `cp <fqdn>.pkcs8.key <fqdn>.pkcs8.pem` + `cmp` | Create a PEM copy and confirm the files match. |
 | 10 | `chown -R root:logstash` / `chmod 640` | Apply ownership and permissions so Logstash can read the certs. |
 
+---
+
+## Elaborate on Step 6
+
+This is a single `openssl` command that performs the **CA signing step** of a typical certificate-generation workflow. In plain terms, it takes a Certificate Signing Request (CSR) that was previously generated for this machine, signs it with your local Certificate Authority (CA), and writes the resulting signed certificate to disk.
+
+Here is what each piece of the command does:
+
+- The `x509 -req` subcommand tells OpenSSL to act on a CSR (`-req` = request mode) and produce an X.509 certificate as output. Without `-req`, the `x509` tool would instead expect to read an existing certificate.
+- `-in $(hostname -f).csr` gives the input file. The shell runs `hostname -f` first, which returns the machine's fully-qualified domain name (e.g. `server.example.com`), so the actual input file is something like `server.example.com.csr`. Using the FQDN in filenames keeps multi-machine setups organized and avoids collisions.
+- `-CA ca.crt` and `-CAkey ca.key` identify the CA's certificate and its private key. These are used to sign the request. The command needs read access to the private key, which is why `sudo` is used — `ca.key` is typically `chmod 600` and owned by `root`, so a normal user can't even open it.
+- `-CAcreateserial` tells OpenSSL to create and manage a serial-number file (`ca.srl`). Each certificate the CA issues gets a unique serial number from this file; if the file doesn't exist yet, this flag creates it starting at `01`. This prevents two certificates from accidentally sharing a serial number, which matters if you ever need to revoke one.
+- `-out $(hostname -f).crt` writes the final signed certificate to a file named after the same FQDN (e.g. `server.example.com.crt`). This is the certificate you'd install on the server or hand to the client.
+- `-days 825` sets the validity period: 825 days is just over 2 years and 3 months. This is a common choice to stay safely under internal or third-party maximum-lifetime policies — some ecosystems (for example, Apple's rules for publicly trusted certs) cap validity at 398 days, so picking 825 leaves headroom for your own CA without triggering stricter public-CA limits.
+- `-sha256` selects SHA-256 as the digest algorithm for the CA's signature. This is the modern baseline; anything weaker (like SHA-1) is rejected by current browsers and TLS libraries.
+- `-copy_extensions copy` is the part people often forget. It copies the X.509 extension blocks from the CSR into the finished certificate, most importantly the `subjectAltName` (SAN) list. Modern TLS clients ignore the deprecated `CN` field for hostname verification, so if you don't copy the SANs, your certificate will be useless for HTTPS even though it was generated "successfully."
+
+### Gotchas to watch out for
+
+- **`hostname -f` must resolve.** If this machine's FQDN isn't resolvable (bad hosts entry, no domain configured), `hostname -f` may return nothing or just the short hostname, and the command will operate on `.csr` or the wrong filename. If that happens, nothing is signed and you'll get a "no such file" error.
+- **`-copy_extensions copy` requires OpenSSL 1.1.1+.** On older system OpenSSL versions this flag doesn't exist, and the command fails immediately. If you need to support legacy OpenSSL, you'd instead bake the extensions into the CA config file's `[usr_cert]` section.
+- **The CA key is the crown jewel.** Anyone holding `ca.key` can mint certificates for any hostname trusted by your CA, so the `sudo` here is also a reminder that this file should never leave a secure, permission-restricted location.
+- **Self-signed vs. CA-signed.** This command produces a CA-signed certificate. It is a different step from generating a self-signed cert (`openssl req -x509 -newkey`), and it's only as trustworthy as your `ca.crt` being installed on the machines that should trust it.
+
+In short: the command turns a host's certificate request into a real, CA-signed certificate with a sane validity window, a modern hash, and the critical SAN extensions preserved — which is exactly what you need before placing the cert into service.
+
+---
+
+
 ### Multi-SAN example
 
 To add more hostnames/IPs to the certificate, extend the `-addext` value, e.g.:
